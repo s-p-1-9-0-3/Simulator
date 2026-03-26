@@ -1,13 +1,7 @@
-# entorno virtual
 .venv/
-
-# python
 __pycache__/
 *.pyc
-
-# streamlit
-.streamlit/secrets.toml
-
-# sqlite temporales (MUY IMPORTANTE)
+*.db
 *.db-shm
 *.db-wal
+.streamlit/secrets.toml

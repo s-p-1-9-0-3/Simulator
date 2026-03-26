@@ -1,5 +1,7 @@
+import json
 import os
-import sqlite3
+import re
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -504,63 +506,120 @@ if "config_unlocked" not in st.session_state:
 
 
 # =========================================================
-# DB
+# STORAGE (CSV + JSON)
 # =========================================================
-@st.cache_resource
-def get_connection():
-    conn = sqlite3.connect(
-        "alojamientos.db",
-        check_same_thread=False,
-        timeout=30,
-        isolation_level=None
-    )
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-    except Exception:
-        pass
-    return conn
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "datos"
+CONFIG_DIR = BASE_DIR / "config"
+CONFIG_PATH = CONFIG_DIR / "empresas_config.json"
+
+DATA_DIR.mkdir(exist_ok=True)
+CONFIG_DIR.mkdir(exist_ok=True)
 
 
-conn = get_connection()
+def slugify(texto: str) -> str:
+    texto = str(texto).strip().lower()
+    texto = re.sub(r"[^a-z0-9]+", "_", texto)
+    return texto.strip("_")
 
-with conn:
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS clientes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT UNIQUE
-    )
-    """)
 
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS alojamientos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER,
-        nombre TEXT,
-        coste_limpieza REAL,
-        FOREIGN KEY (cliente_id) REFERENCES clientes(id)
-    )
-    """)
+def pretty_name_from_slug(slug: str) -> str:
+    return str(slug).replace("_", " ").strip().title()
 
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS configuracion_empresa (
-        cliente_id INTEGER PRIMARY KEY,
-        markup_airbnb REAL,
-        markup_booking REAL,
-        markup_web REAL,
-        FOREIGN KEY (cliente_id) REFERENCES clientes(id)
-    )
-    """)
 
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS descuentos_empresa (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER,
-        noches_desde INTEGER,
-        noches_hasta INTEGER,
-        descuento REAL,
-        FOREIGN KEY (cliente_id) REFERENCES clientes(id)
-    )
-    """)
+def default_empresa_config(nombre_empresa: str, archivo_csv: str) -> dict:
+    return {
+        "nombre": nombre_empresa,
+        "archivo_csv": archivo_csv,
+        "markups": {
+            "Airbnb": 0.0,
+            "Booking": 0.0,
+            "Web": 0.0,
+        },
+        "descuentos": [
+            {"Desde": 2, "Hasta": 3, "Descuento (%)": 45},
+            {"Desde": 4, "Hasta": 6, "Descuento (%)": 50},
+            {"Desde": 7, "Hasta": 10, "Descuento (%)": 55},
+        ],
+    }
+
+
+def load_config_from_disk() -> dict:
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def save_config_to_disk(config: dict):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def bootstrap_config_with_existing_csvs(config: dict) -> dict:
+    changed = False
+
+    for ruta in sorted(DATA_DIR.glob("*.csv")):
+        empresa_id = slugify(ruta.stem)
+        if empresa_id not in config:
+            config[empresa_id] = default_empresa_config(
+                nombre_empresa=pretty_name_from_slug(ruta.stem),
+                archivo_csv=ruta.name,
+            )
+            changed = True
+        else:
+            if not config[empresa_id].get("archivo_csv"):
+                config[empresa_id]["archivo_csv"] = ruta.name
+                changed = True
+            if not config[empresa_id].get("nombre"):
+                config[empresa_id]["nombre"] = pretty_name_from_slug(ruta.stem)
+                changed = True
+            if "markups" not in config[empresa_id]:
+                config[empresa_id]["markups"] = default_empresa_config("", "")["markups"]
+                changed = True
+            if "descuentos" not in config[empresa_id]:
+                config[empresa_id]["descuentos"] = default_empresa_config("", "")["descuentos"]
+                changed = True
+
+    if changed:
+        save_config_to_disk(config)
+
+    return config
+
+
+@st.cache_data
+def cargar_config() -> dict:
+    config = load_config_from_disk()
+    return bootstrap_config_with_existing_csvs(config)
+
+
+def guardar_config(config: dict):
+    save_config_to_disk(config)
+    cargar_config.clear()
+
+
+def asegurar_empresa(nombre_empresa: str) -> str:
+    empresa_id = slugify(nombre_empresa)
+    config = cargar_config()
+
+    if empresa_id not in config:
+        config[empresa_id] = default_empresa_config(
+            nombre_empresa=nombre_empresa.strip(),
+            archivo_csv=f"{empresa_id}.csv",
+        )
+        guardar_config(config)
+
+    return empresa_id
+
+
+def ruta_csv_empresa(empresa_id: str) -> Path:
+    config = cargar_config()
+    archivo = config.get(empresa_id, {}).get("archivo_csv", f"{empresa_id}.csv")
+    return DATA_DIR / archivo
 
 
 # =========================================================
@@ -600,79 +659,53 @@ def parse_float_input(valor: str, nombre: str, minimo: Optional[float] = None, m
     return numero
 
 
-def obtener_o_crear_cliente(nombre_empresa: str) -> int:
-    cur = conn.execute("SELECT id FROM clientes WHERE nombre = ?", (nombre_empresa,))
-    fila = cur.fetchone()
-    if fila:
-        return fila[0]
+def contar_alojamientos(empresa_id: str) -> int:
+    ruta = ruta_csv_empresa(empresa_id)
+    if not ruta.exists():
+        return 0
 
-    cur = conn.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre_empresa,))
-    return cur.lastrowid
-
-
-def contar_alojamientos(cliente_id: int) -> int:
-    cur = conn.execute("SELECT COUNT(*) FROM alojamientos WHERE cliente_id = ?", (cliente_id,))
-    return cur.fetchone()[0]
+    try:
+        df = pd.read_csv(ruta)
+        return len(df)
+    except Exception:
+        return 0
 
 
 def obtener_empresas():
-    return conn.execute("SELECT id, nombre FROM clientes ORDER BY nombre").fetchall()
+    config = cargar_config()
+    empresas = [(empresa_id, data.get("nombre", pretty_name_from_slug(empresa_id))) for empresa_id, data in config.items()]
+    return sorted(empresas, key=lambda x: x[1].lower())
 
 
-def obtener_apartamentos(cliente_id: int):
-    return conn.execute("""
-        SELECT nombre, coste_limpieza
-        FROM alojamientos
-        WHERE cliente_id = ?
-        ORDER BY nombre
-    """, (cliente_id,)).fetchall()
+def obtener_markups_empresa(empresa_id: str):
+    config = cargar_config()
+    markups = config.get(empresa_id, {}).get("markups", {})
+    return {
+        "Airbnb": float(markups.get("Airbnb", 0.0) or 0.0),
+        "Booking": float(markups.get("Booking", 0.0) or 0.0),
+        "Web": float(markups.get("Web", 0.0) or 0.0),
+    }
 
 
-def obtener_markups_empresa(cliente_id: int):
-    cur = conn.execute("""
-        SELECT markup_airbnb, markup_booking, markup_web
-        FROM configuracion_empresa
-        WHERE cliente_id = ?
-    """, (cliente_id,))
-    fila = cur.fetchone()
+def guardar_markups_empresa(empresa_id: str, markup_airbnb: float, markup_booking: float, markup_web: float):
+    config = cargar_config()
+    if empresa_id not in config:
+        config[empresa_id] = default_empresa_config(pretty_name_from_slug(empresa_id), f"{empresa_id}.csv")
 
-    if fila:
-        return {
-            "Airbnb": float(fila[0]) if fila[0] is not None else 0.0,
-            "Booking": float(fila[1]) if fila[1] is not None else 0.0,
-            "Web": float(fila[2]) if fila[2] is not None else 0.0,
-        }
-
-    return {"Airbnb": 0.0, "Booking": 0.0, "Web": 0.0}
+    config[empresa_id]["markups"] = {
+        "Airbnb": markup_airbnb,
+        "Booking": markup_booking,
+        "Web": markup_web,
+    }
+    guardar_config(config)
 
 
-def guardar_markups_empresa(cliente_id: int, markup_airbnb: float, markup_booking: float, markup_web: float):
-    conn.execute("""
-        INSERT INTO configuracion_empresa (
-            cliente_id,
-            markup_airbnb,
-            markup_booking,
-            markup_web
-        )
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(cliente_id) DO UPDATE SET
-            markup_airbnb = excluded.markup_airbnb,
-            markup_booking = excluded.markup_booking,
-            markup_web = excluded.markup_web
-    """, (cliente_id, markup_airbnb, markup_booking, markup_web))
+def obtener_descuentos_empresa(empresa_id: str) -> pd.DataFrame:
+    config = cargar_config()
+    descuentos = config.get(empresa_id, {}).get("descuentos", [])
 
-
-def obtener_descuentos_empresa(cliente_id: int) -> pd.DataFrame:
-    cur = conn.execute("""
-        SELECT noches_desde, noches_hasta, descuento
-        FROM descuentos_empresa
-        WHERE cliente_id = ?
-        ORDER BY noches_desde
-    """, (cliente_id,))
-    filas = cur.fetchall()
-
-    if filas:
-        return pd.DataFrame(filas, columns=["Desde", "Hasta", "Descuento (%)"])
+    if descuentos:
+        return pd.DataFrame(descuentos)
 
     return pd.DataFrame({
         "Desde": [2, 4, 7],
@@ -681,51 +714,51 @@ def obtener_descuentos_empresa(cliente_id: int) -> pd.DataFrame:
     })
 
 
-def guardar_descuentos_empresa(cliente_id: int, df_descuentos: pd.DataFrame):
-    # FIX: DELETE + INSERTs en una transacción atómica
-    with conn:
-        conn.execute("DELETE FROM descuentos_empresa WHERE cliente_id = ?", (cliente_id,))
+def guardar_descuentos_empresa(empresa_id: str, df_descuentos: pd.DataFrame):
+    filas_limpias = []
 
-        for _, fila in df_descuentos.iterrows():
-            desde_raw = fila.get("Desde")
-            hasta_raw = fila.get("Hasta")
-            descuento_raw = fila.get("Descuento (%)")
+    for _, fila in df_descuentos.iterrows():
+        desde_raw = fila.get("Desde")
+        hasta_raw = fila.get("Hasta")
+        descuento_raw = fila.get("Descuento (%)")
 
-            if pd.isna(desde_raw) or pd.isna(hasta_raw) or pd.isna(descuento_raw):
-                continue
+        if pd.isna(desde_raw) or pd.isna(hasta_raw) or pd.isna(descuento_raw):
+            continue
 
-            try:
-                desde = int(float(str(desde_raw).replace(",", ".")))
-                hasta = int(float(str(hasta_raw).replace(",", ".")))
-                descuento = float(str(descuento_raw).replace(",", "."))
-            except Exception:
-                continue
+        try:
+            desde = int(float(str(desde_raw).replace(",", ".")))
+            hasta = int(float(str(hasta_raw).replace(",", ".")))
+            descuento = float(str(descuento_raw).replace(",", "."))
+        except Exception:
+            continue
 
-            if desde < 1 or hasta < desde:
-                continue
+        if desde < 1 or hasta < desde:
+            continue
 
-            conn.execute("""
-                INSERT INTO descuentos_empresa (
-                    cliente_id,
-                    noches_desde,
-                    noches_hasta,
-                    descuento
-                )
-                VALUES (?, ?, ?, ?)
-            """, (cliente_id, desde, hasta, descuento))
+        filas_limpias.append({
+            "Desde": desde,
+            "Hasta": hasta,
+            "Descuento (%)": descuento,
+        })
+
+    config = cargar_config()
+    if empresa_id not in config:
+        config[empresa_id] = default_empresa_config(pretty_name_from_slug(empresa_id), f"{empresa_id}.csv")
+
+    config[empresa_id]["descuentos"] = filas_limpias
+    guardar_config(config)
 
 
-def obtener_descuento_para_noches(cliente_id: int, noches: int) -> Optional[float]:
-    cur = conn.execute("""
-        SELECT descuento
-        FROM descuentos_empresa
-        WHERE cliente_id = ?
-          AND ? BETWEEN noches_desde AND noches_hasta
-        ORDER BY noches_desde
-        LIMIT 1
-    """, (cliente_id, noches))
-    fila = cur.fetchone()
-    return float(fila[0]) if fila else None
+def obtener_descuento_para_noches(empresa_id: str, noches: int) -> Optional[float]:
+    df = obtener_descuentos_empresa(empresa_id)
+
+    for _, fila in df.iterrows():
+        try:
+            if int(fila["Desde"]) <= noches <= int(fila["Hasta"]):
+                return float(fila["Descuento (%)"])
+        except Exception:
+            continue
+    return None
 
 
 def detectar_columnas(df: pd.DataFrame):
@@ -745,7 +778,8 @@ def detectar_columnas(df: pd.DataFrame):
 
         if col_limpieza is None and (
             "limp" in col_norm or
-            "clean" in col_norm
+            "clean" in col_norm or
+            "coste" in col_norm
         ):
             col_limpieza = col
 
@@ -777,6 +811,62 @@ def leer_archivo_datos(archivo):
     raise Exception("Formato no soportado. Usa CSV o XLSX")
 
 
+def normalizar_df_alojamientos(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    col_nombre, col_limpieza = detectar_columnas(df)
+
+    if not col_nombre or not col_limpieza:
+        raise ValueError("No se detectan columnas válidas de nombre y limpieza")
+
+    salida = df[[col_nombre, col_limpieza]].copy()
+    salida.columns = ["nombre", "coste_limpieza"]
+
+    salida["nombre"] = salida["nombre"].astype(str).str.strip()
+    salida["coste_limpieza"] = (
+        salida["coste_limpieza"]
+        .astype(str)
+        .str.replace(",", ".", regex=False)
+        .str.strip()
+    )
+
+    salida["coste_limpieza"] = pd.to_numeric(salida["coste_limpieza"], errors="coerce")
+    salida = salida.dropna(subset=["nombre", "coste_limpieza"])
+    salida = salida[salida["nombre"] != ""]
+    salida = salida.drop_duplicates(subset=["nombre"]).sort_values("nombre")
+
+    return salida.reset_index(drop=True)
+
+
+def obtener_apartamentos(empresa_id: str):
+    ruta = ruta_csv_empresa(empresa_id)
+    if not ruta.exists():
+        return []
+
+    try:
+        df = pd.read_csv(ruta)
+    except Exception:
+        return []
+
+    if {"nombre", "coste_limpieza"}.issubset(set(df.columns)):
+        normalizado = df.copy()
+    else:
+        try:
+            normalizado = normalizar_df_alojamientos(df)
+        except Exception:
+            return []
+
+    normalizado["coste_limpieza"] = pd.to_numeric(normalizado["coste_limpieza"], errors="coerce")
+    normalizado = normalizado.dropna(subset=["nombre", "coste_limpieza"])
+
+    return list(
+        normalizado[["nombre", "coste_limpieza"]]
+        .sort_values("nombre")
+        .itertuples(index=False, name=None)
+    )
+
+
 # =========================================================
 # NAV
 # =========================================================
@@ -802,7 +892,6 @@ def render_nav():
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div style="height: 1.4rem;"></div>', unsafe_allow_html=True)
 
-    # Cards HTML con tamaño y layout perfectamente fijo
     st.markdown("""
     <div class="nav-grid">
         <div class="nav-card" id="nc-upload">
@@ -828,7 +917,6 @@ def render_nav():
     </div>
     """, unsafe_allow_html=True)
 
-    # Botones Streamlit ocultos — las cards HTML los triggean via JS
     st.markdown('<div class="hidden-nav-btns" style="display:none!important;visibility:hidden;height:0;overflow:hidden;position:absolute;">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="small")
     with c1:
@@ -872,7 +960,6 @@ def render_nav():
                 });
             });
         }
-        // Reintenta hasta que el DOM esté listo
         let attempts = 0;
         const interval = setInterval(() => {
             wireCards();
@@ -934,8 +1021,8 @@ def section_upload():
             else:
                 st.success(f"✅ Columnas detectadas: {col_nombre} / {col_limpieza}")
 
-                cliente_id = obtener_o_crear_cliente(empresa)
-                total_actual = contar_alojamientos(cliente_id)
+                empresa_id = asegurar_empresa(empresa)
+                total_actual = contar_alojamientos(empresa_id)
 
                 if total_actual > 0:
                     st.warning(
@@ -950,34 +1037,14 @@ def section_upload():
                     key="upload_confirm"
                 )
 
-                if st.button("Actualizar base de datos", key="upload_update_btn"):
+                if st.button("Actualizar datos", key="upload_update_btn"):
                     if not confirmar:
                         st.error("❌ Debes confirmar antes de continuar")
                     else:
-                        conn.execute("DELETE FROM alojamientos WHERE cliente_id = ?", (cliente_id,))
-
-                        insertados = 0
-                        for _, fila in df.iterrows():
-                            nombre_alojamiento = str(fila[col_nombre]).strip()
-
-                            if nombre_alojamiento == "" or pd.isna(fila[col_limpieza]):
-                                continue
-
-                            valor_limpieza = str(fila[col_limpieza]).replace(",", ".").strip()
-
-                            try:
-                                limpieza = float(valor_limpieza)
-                            except ValueError:
-                                continue
-
-                            conn.execute("""
-                                INSERT INTO alojamientos (cliente_id, nombre, coste_limpieza)
-                                VALUES (?, ?, ?)
-                            """, (cliente_id, nombre_alojamiento, limpieza))
-
-                            insertados += 1
-
-                        st.success(f"✅ Datos actualizados correctamente. {insertados} alojamientos cargados.")
+                        df_limpio = normalizar_df_alojamientos(df)
+                        df_limpio.to_csv(ruta_csv_empresa(empresa_id), index=False, encoding="utf-8")
+                        cargar_config.clear()
+                        st.success(f"✅ Datos actualizados correctamente. {len(df_limpio)} alojamientos cargados.")
 
         except Exception as e:
             st.error(f"❌ Error al leer el archivo: {e}")
@@ -999,15 +1066,14 @@ def section_config():
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    opciones = {nombre: cliente_id for cliente_id, nombre in empresas}
+    opciones = {nombre: empresa_id for empresa_id, nombre in empresas}
     empresa_sel = st.selectbox("Empresa", list(opciones.keys()), key="config_empresa")
-    cliente_id = opciones[empresa_sel]
+    empresa_id = opciones[empresa_sel]
 
-    markups_actuales = obtener_markups_empresa(cliente_id)
+    markups_actuales = obtener_markups_empresa(empresa_id)
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        # FIX: formato explícito en lugar de .replace(".0", "")
         markup_airbnb_txt = st.text_input(
             "Markup Airbnb (%)",
             value=f"{markups_actuales['Airbnb']:.2f}".rstrip("0").rstrip("."),
@@ -1027,13 +1093,13 @@ def section_config():
         )
 
     st.write("### 📊 Descuentos por rango de noches")
-    descuentos_df_actual = obtener_descuentos_empresa(cliente_id)
+    descuentos_df_actual = obtener_descuentos_empresa(empresa_id)
 
     descuentos_editados = st.data_editor(
         descuentos_df_actual,
         num_rows="dynamic",
         use_container_width=True,
-        key=f"cfg_descuentos_editor_{cliente_id}"
+        key=f"cfg_descuentos_editor_{empresa_id}"
     )
 
     if st.button("Guardar configuración", key="cfg_save_btn"):
@@ -1042,8 +1108,8 @@ def section_config():
             markup_booking = parse_float_input(markup_booking_txt, "Markup Booking (%)")
             markup_web = parse_float_input(markup_web_txt, "Markup Web (%)")
 
-            guardar_markups_empresa(cliente_id, markup_airbnb, markup_booking, markup_web)
-            guardar_descuentos_empresa(cliente_id, descuentos_editados)
+            guardar_markups_empresa(empresa_id, markup_airbnb, markup_booking, markup_web)
+            guardar_descuentos_empresa(empresa_id, descuentos_editados)
             st.success("✅ Configuración guardada")
 
         except ValueError as e:
@@ -1069,11 +1135,11 @@ def section_simuleitor():
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    opciones = {nombre: cliente_id for cliente_id, nombre in empresas}
+    opciones = {nombre: empresa_id for empresa_id, nombre in empresas}
     empresa_sel = st.selectbox("Empresa", list(opciones.keys()), key="sim_empresa")
-    cliente_id = opciones[empresa_sel]
+    empresa_id = opciones[empresa_sel]
 
-    datos = obtener_apartamentos(cliente_id)
+    datos = obtener_apartamentos(empresa_id)
     if not datos:
         st.info("No hay apartamentos")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1115,11 +1181,11 @@ def section_simuleitor():
             precio = parse_float_input(precio_txt, "Precio medio", minimo=0)
             noches = parse_int_input(noches_txt, "Noches", minimo=1)
 
-            descuento = obtener_descuento_para_noches(cliente_id, noches)
+            descuento = obtener_descuento_para_noches(empresa_id, noches)
             if descuento is None:
                 st.error("No hay descuento para esas noches")
             else:
-                markups = obtener_markups_empresa(cliente_id)
+                markups = obtener_markups_empresa(empresa_id)
                 resultados = {}
 
                 for canal in ["Airbnb", "Booking", "Web"]:
@@ -1187,11 +1253,11 @@ def section_calculeitor():
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    opciones = {nombre: cliente_id for cliente_id, nombre in empresas}
+    opciones = {nombre: empresa_id for empresa_id, nombre in empresas}
     empresa_sel = st.selectbox("Empresa", list(opciones.keys()), key="calc_empresa")
-    cliente_id = opciones[empresa_sel]
+    empresa_id = opciones[empresa_sel]
 
-    datos = obtener_apartamentos(cliente_id)
+    datos = obtener_apartamentos(empresa_id)
     if not datos:
         st.info("No hay apartamentos")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1221,35 +1287,38 @@ def section_calculeitor():
             noches = parse_int_input(noches_txt, "Noches", minimo=1)
             incremento = parse_float_input(incremento_txt, "% esperado este año")
 
-            descuento = obtener_descuento_para_noches(cliente_id, noches)
+            descuento = obtener_descuento_para_noches(empresa_id, noches)
             if descuento is None:
                 st.error("No hay descuento para esas noches")
             else:
                 adr_objetivo = adr_pasado * (1 + incremento / 100)
-                markups = obtener_markups_empresa(cliente_id)
+                markups = obtener_markups_empresa(empresa_id)
 
                 markup_airbnb = markups["Airbnb"]
                 factor_markup = (1 + markup_airbnb / 100)
                 factor_descuento = (1 - descuento / 100)
                 limpieza_noche = limpieza / noches
 
-                precio_rms = (
-                    (adr_objetivo - limpieza_noche)
-                    / (factor_markup * factor_descuento)
-                )
+                if factor_markup * factor_descuento == 0:
+                    st.error("La configuración actual produce una división por cero.")
+                else:
+                    precio_rms = (
+                        (adr_objetivo - limpieza_noche)
+                        / (factor_markup * factor_descuento)
+                    )
 
-                st.write("### Precio a cargar en RMS")
-                st.markdown(
-                    f"""
-                    <div class="single-rms">
-                        <div class="kpi-card kpi-good">
-                            <div class="kpi-title">Precio único RMS</div>
-                            <div class="kpi-total">{precio_rms:,.2f}<span class="kpi-currency">€</span></div>
+                    st.write("### Precio a cargar en RMS")
+                    st.markdown(
+                        f"""
+                        <div class="single-rms">
+                            <div class="kpi-card kpi-good">
+                                <div class="kpi-title">Precio único RMS</div>
+                                <div class="kpi-total">{precio_rms:,.2f}<span class="kpi-currency">€</span></div>
+                            </div>
                         </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+                        """,
+                        unsafe_allow_html=True
+                    )
 
         except Exception as e:
             st.error(f"Error en Calculeitor: {e}")

@@ -1,0 +1,106 @@
+{
+  "inmalaga": {
+    "nombre": "Inmalaga",
+    "archivo_csv": "inmalaga.csv",
+    "markups": {
+      "Airbnb": 0.0,
+      "Booking": 0.0,
+      "Web": 0.0
+    },
+    "descuentos": [
+      {
+        "Desde": 2,
+        "Hasta": 3,
+        "Descuento (%)": 45
+      },
+      {
+        "Desde": 4,
+        "Hasta": 6,
+        "Descuento (%)": 50
+      },
+      {
+        "Desde": 7,
+        "Hasta": 10,
+        "Descuento (%)": 55
+      }
+    ]
+  },
+  "la_barcena": {
+    "nombre": "La Barcena",
+    "archivo_csv": "la_barcena.csv",
+    "markups": {
+      "Airbnb": 0.0,
+      "Booking": 0.0,
+      "Web": 0.0
+    },
+    "descuentos": [
+      {
+        "Desde": 2,
+        "Hasta": 3,
+        "Descuento (%)": 45
+      },
+      {
+        "Desde": 4,
+        "Hasta": 6,
+        "Descuento (%)": 50
+      },
+      {
+        "Desde": 7,
+        "Hasta": 10,
+        "Descuento (%)": 55
+      }
+    ]
+  },
+  "living_4_malaga": {
+    "nombre": "Living 4 Malaga",
+    "archivo_csv": "living_4_malaga.csv",
+    "markups": {
+      "Airbnb": 0.0,
+      "Booking": 0.0,
+      "Web": 0.0
+    },
+    "descuentos": [
+      {
+        "Desde": 2,
+        "Hasta": 3,
+        "Descuento (%)": 45
+      },
+      {
+        "Desde": 4,
+        "Hasta": 6,
+        "Descuento (%)": 50
+      },
+      {
+        "Desde": 7,
+        "Hasta": 10,
+        "Descuento (%)": 55
+      }
+    ]
+  },
+  "sunstay_rentals": {
+    "nombre": "Sunstay Rentals",
+    "archivo_csv": "sunstay_rentals.csv",
+    "markups": {
+      "Airbnb": 0.0,
+      "Booking": 0.0,
+      "Web": 0.0
+    },
+    "descuentos": [
+      {
+        "Desde": 2,
+        "Hasta": 3,
+        "Descuento (%)": 45
+      },
+      {
+        "Desde": 4,
+        "Hasta": 6,
+        "Descuento (%)": 50
+      },
+      {
+        "Desde": 7,
+        "Hasta": 10,
+        "Descuento (%)": 55
+      }
+    ]
+  }
+}
