@@ -7,9 +7,6 @@ import pandas as pd
 import streamlit as st
 
 
-# =========================================================
-# CONFIGURACIÓN GENERAL
-# =========================================================
 ADMIN_PIN = "1234"  # <-- CAMBIA ESTE PIN
 CARPETA_DATOS = Path("datos")
 
@@ -238,9 +235,6 @@ div[data-testid="stFileUploader"] section {
 """, unsafe_allow_html=True)
 
 
-# =========================================================
-# ESTADO UI
-# =========================================================
 if "active_section" not in st.session_state:
     st.session_state.active_section = None
 
@@ -251,9 +245,6 @@ if "config_unlocked" not in st.session_state:
     st.session_state.config_unlocked = False
 
 
-# =========================================================
-# DB
-# =========================================================
 @st.cache_resource
 def get_connection():
     conn = sqlite3.connect(
@@ -311,9 +302,6 @@ with conn:
     """)
 
 
-# =========================================================
-# HELPERS
-# =========================================================
 def parse_int_input(valor: str, nombre: str, minimo: Optional[int] = None, maximo: Optional[int] = None) -> int:
     texto = str(valor).strip().replace(",", ".")
     if texto == "":
@@ -530,12 +518,11 @@ def leer_archivo_path(path: Path) -> pd.DataFrame:
         return pd.read_excel(path)
 
     if nombre.endswith(".csv"):
-        errores = []
         for encoding in ["utf-8", "latin-1", "cp1252"]:
             try:
                 return pd.read_csv(path, encoding=encoding, sep=None, engine="python")
-            except Exception as e:
-                errores.append(str(e))
+            except Exception:
+                continue
         raise Exception(f"No se pudo leer {path.name}")
 
     raise Exception(f"Formato no soportado: {path.name}")
@@ -582,13 +569,11 @@ def cargar_archivo_en_bd(df: pd.DataFrame, nombre_empresa: str) -> int:
 
 def importar_todos_los_archivos_de_carpeta(carpeta: Path):
     if not carpeta.exists():
-        raise FileNotFoundError(f"No existe la carpeta: {carpeta}")
+        return []
 
     archivos = sorted(list(carpeta.glob("*.csv")) + list(carpeta.glob("*.xlsx")))
-    if not archivos:
-        raise FileNotFoundError(f"No hay CSV/XLSX en la carpeta: {carpeta}")
-
     resultados = []
+
     for archivo in archivos:
         nombre_empresa = archivo.stem.strip()
         try:
@@ -601,9 +586,31 @@ def importar_todos_los_archivos_de_carpeta(carpeta: Path):
     return resultados
 
 
-# =========================================================
-# NAV
-# =========================================================
+@st.cache_data(ttl=60)
+def obtener_firma_carpeta_datos():
+    if not CARPETA_DATOS.exists():
+        return ()
+
+    archivos = sorted(list(CARPETA_DATOS.glob("*.csv")) + list(CARPETA_DATOS.glob("*.xlsx")))
+    firma = []
+    for a in archivos:
+        stat = a.stat()
+        firma.append((a.name, stat.st_mtime, stat.st_size))
+    return tuple(firma)
+
+
+def auto_importar_datos():
+    firma_actual = obtener_firma_carpeta_datos()
+
+    if "datos_firma_cargada" not in st.session_state:
+        st.session_state.datos_firma_cargada = None
+
+    if firma_actual and st.session_state.datos_firma_cargada != firma_actual:
+        resultados = importar_todos_los_archivos_de_carpeta(CARPETA_DATOS)
+        st.session_state.datos_firma_cargada = firma_actual
+        st.session_state.ultimo_import_resultado = resultados
+
+
 def render_nav():
     col_logo, col_title = st.columns([1.15, 4.85], gap="small")
 
@@ -626,7 +633,7 @@ def render_nav():
     with c1:
         st.markdown('<div class="nav-card-wrap">', unsafe_allow_html=True)
         if st.button(
-            "📁\n\nSubir archivo\n\nCarga manual o\nimportación masiva",
+            "📁\n\nSubir archivo\n\nCarga manual o\nlectura automática",
             key="nav1",
             use_container_width=True
         ):
@@ -691,110 +698,80 @@ def pin_gate(section_name: str, state_key: str):
     return True
 
 
-# =========================================================
-# SECCIÓN: SUBIR / IMPORTAR
-# =========================================================
 def section_upload():
     allowed = pin_gate("📁 Subir archivo", "upload_unlocked")
     if not allowed:
         return
 
-    tab1, tab2 = st.tabs(["Carga manual", "Importar carpeta datos/"])
+    st.subheader("Carga manual")
+    empresa = st.text_input("Nombre de la empresa", key="upload_empresa")
+    archivo = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"], key="upload_file")
 
-    with tab1:
-        st.subheader("Carga manual de un archivo")
-        empresa = st.text_input("Nombre de la empresa", key="upload_empresa")
-        archivo = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"], key="upload_file")
+    if archivo and empresa:
+        try:
+            df = leer_archivo_datos(archivo)
+            df.columns = df.columns.str.strip().str.lower()
 
-        if archivo and empresa:
-            try:
-                df = leer_archivo_datos(archivo)
-                df.columns = df.columns.str.strip().str.lower()
+            st.write("Columnas detectadas:", list(df.columns))
+            col_nombre, col_limpieza = detectar_columnas(df)
 
-                st.write("Columnas detectadas:", list(df.columns))
-                col_nombre, col_limpieza = detectar_columnas(df)
+            if not col_nombre or not col_limpieza:
+                st.error("❌ No se detectan columnas válidas en el archivo")
+                st.info("Debe haber una columna de nombre/apartamento y otra de limpieza.")
+            else:
+                st.success(f"✅ Columnas detectadas: {col_nombre} / {col_limpieza}")
 
-                if not col_nombre or not col_limpieza:
-                    st.error("❌ No se detectan columnas válidas en el archivo")
-                    st.info("Debe haber una columna de nombre/apartamento y otra de limpieza.")
-                else:
-                    st.success(f"✅ Columnas detectadas: {col_nombre} / {col_limpieza}")
+                cliente_id = obtener_o_crear_cliente(empresa)
+                total_actual = contar_alojamientos(cliente_id)
 
-                    cliente_id = obtener_o_crear_cliente(empresa)
-                    total_actual = contar_alojamientos(cliente_id)
-
-                    if total_actual > 0:
-                        st.warning(
-                            f"⚠️ Esta empresa ya tiene {total_actual} alojamientos. "
-                            "Si continúas, se reemplazarán por los del nuevo archivo."
-                        )
-                    else:
-                        st.info("ℹ️ Esta empresa no tiene alojamientos previos.")
-
-                    confirmar = st.checkbox(
-                        "Confirmo que quiero reemplazar los datos actuales",
-                        key="upload_confirm"
+                if total_actual > 0:
+                    st.warning(
+                        f"⚠️ Esta empresa ya tiene {total_actual} alojamientos. "
+                        "Si continúas, se reemplazarán por los del nuevo archivo."
                     )
+                else:
+                    st.info("ℹ️ Esta empresa no tiene alojamientos previos.")
 
-                    if st.button("Actualizar base de datos", key="upload_update_btn"):
-                        if not confirmar:
-                            st.error("❌ Debes confirmar antes de continuar")
-                        else:
-                            insertados = cargar_archivo_en_bd(df, empresa)
-                            st.success(f"✅ Datos actualizados correctamente. {insertados} alojamientos cargados.")
+                confirmar = st.checkbox(
+                    "Confirmo que quiero reemplazar los datos actuales",
+                    key="upload_confirm"
+                )
 
-            except Exception as e:
-                st.error(f"❌ Error al leer el archivo: {e}")
+                if st.button("Actualizar base de datos", key="upload_update_btn"):
+                    if not confirmar:
+                        st.error("❌ Debes confirmar antes de continuar")
+                    else:
+                        insertados = cargar_archivo_en_bd(df, empresa)
+                        st.success(f"✅ Datos actualizados correctamente. {insertados} alojamientos cargados.")
 
-    with tab2:
-        st.subheader("Importación masiva desde la carpeta `datos/`")
-        st.write(f"Ruta esperada: `{CARPETA_DATOS}`")
+        except Exception as e:
+            st.error(f"❌ Error al leer el archivo: {e}")
 
-        if CARPETA_DATOS.exists():
-            archivos = sorted(list(CARPETA_DATOS.glob("*.csv")) + list(CARPETA_DATOS.glob("*.xlsx")))
-            if archivos:
-                st.write("Archivos detectados:")
-                for a in archivos:
-                    st.write(f"- {a.name}")
-            else:
-                st.info("La carpeta existe, pero no contiene CSV/XLSX")
+    st.write("### Lectura automática de `datos/`")
+    st.write(f"Ruta esperada: `{CARPETA_DATOS}`")
+
+    if CARPETA_DATOS.exists():
+        archivos = sorted(list(CARPETA_DATOS.glob("*.csv")) + list(CARPETA_DATOS.glob("*.xlsx")))
+        if archivos:
+            st.success(f"Detectados {len(archivos)} archivos en `datos/`")
+            for a in archivos:
+                st.write(f"- {a.name}")
         else:
-            st.warning("La carpeta `datos/` todavía no existe en el proyecto")
+            st.info("La carpeta existe, pero no contiene CSV/XLSX")
+    else:
+        st.warning("La carpeta `datos/` no existe en el proyecto")
 
-        confirmar_masivo = st.checkbox(
-            "Confirmo que quiero importar/reemplazar todas las empresas desde `datos/`",
-            key="bulk_confirm"
-        )
-
-        if st.button("Importar todos los archivos de datos/", key="bulk_import_btn"):
-            if not confirmar_masivo:
-                st.error("❌ Debes confirmar antes de continuar")
+    if "ultimo_import_resultado" in st.session_state and st.session_state.ultimo_import_resultado:
+        st.write("### Última importación automática")
+        for archivo, empresa, insertados, error in st.session_state.ultimo_import_resultado:
+            if error is None:
+                st.write(f"✔ {archivo} → {empresa}: {insertados} alojamientos")
             else:
-                try:
-                    resultados = importar_todos_los_archivos_de_carpeta(CARPETA_DATOS)
-
-                    ok = [r for r in resultados if r[3] is None]
-                    ko = [r for r in resultados if r[3] is not None]
-
-                    if ok:
-                        st.success(f"✅ Importación completada. Archivos correctos: {len(ok)}")
-                        for archivo, empresa, insertados, _ in ok:
-                            st.write(f"✔ {archivo} → {empresa}: {insertados} alojamientos")
-
-                    if ko:
-                        st.error(f"❌ Archivos con error: {len(ko)}")
-                        for archivo, empresa, _, error in ko:
-                            st.write(f"✖ {archivo} → {empresa}: {error}")
-
-                except Exception as e:
-                    st.error(f"❌ Error en la importación masiva: {e}")
+                st.write(f"✖ {archivo} → {empresa}: {error}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# =========================================================
-# SECCIÓN: CONFIGURACIÓN
-# =========================================================
 def section_config():
     allowed = pin_gate("⚙️ Configuración", "config_unlocked")
     if not allowed:
@@ -858,9 +835,6 @@ def section_config():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# =========================================================
-# SECCIÓN: SIMULEITOR
-# =========================================================
 def section_simuleitor():
     st.markdown(
         '<div class="dashboard-card"><div class="section-title">📊 Simuleitor</div><div class="section-subtitle">Compara los tres canales usando el apartamento seleccionado.</div>',
@@ -974,9 +948,6 @@ def section_simuleitor():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# =========================================================
-# SECCIÓN: CALCULEITOR
-# =========================================================
 def section_calculeitor():
     st.markdown(
         '<div class="dashboard-card"><div class="section-title">🧠 Calculeitor</div><div class="section-subtitle">Calcula un único precio a cargar en RMS usando Airbnb.</div>',
@@ -1059,9 +1030,7 @@ def section_calculeitor():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# =========================================================
-# RENDER
-# =========================================================
+auto_importar_datos()
 render_nav()
 
 section = st.session_state.active_section
