@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -10,6 +11,7 @@ import streamlit as st
 # CONFIGURACIÓN GENERAL
 # =========================================================
 ADMIN_PIN = "1234"  # <-- CAMBIA ESTE PIN
+CARPETA_DATOS = Path("datos")
 
 st.set_page_config(
     page_title="Revenue Dashboard",
@@ -65,7 +67,6 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="st
     min-height: 96px;
 }
 
-/* NAV */
 .nav-card-wrap {
     width: 100%;
 }
@@ -119,14 +120,6 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="st
     background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(78,193,181,0.07) 100%) !important;
 }
 
-.nav-card-wrap .stButton > button:focus {
-    outline: none !important;
-    border-color: rgba(78,193,181,0.90) !important;
-    box-shadow:
-        0 0 0 0.18rem rgba(78,193,181,0.16),
-        0 14px 26px rgba(78,193,181,0.12) !important;
-}
-
 .cards-divider {
     width: 100%;
     height: 1px;
@@ -135,7 +128,6 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="st
     border-radius: 999px;
 }
 
-/* contenido */
 .dashboard-card {
     border: 1px solid rgba(49, 51, 63, 0.10);
     border-radius: 22px;
@@ -531,6 +523,84 @@ def leer_archivo_datos(archivo):
     raise Exception("Formato no soportado. Usa CSV o XLSX")
 
 
+def leer_archivo_path(path: Path) -> pd.DataFrame:
+    nombre = path.name.lower()
+
+    if nombre.endswith(".xlsx"):
+        return pd.read_excel(path)
+
+    if nombre.endswith(".csv"):
+        errores = []
+        for encoding in ["utf-8", "latin-1", "cp1252"]:
+            try:
+                return pd.read_csv(path, encoding=encoding, sep=None, engine="python")
+            except Exception as e:
+                errores.append(str(e))
+        raise Exception(f"No se pudo leer {path.name}")
+
+    raise Exception(f"Formato no soportado: {path.name}")
+
+
+def cargar_archivo_en_bd(df: pd.DataFrame, nombre_empresa: str) -> int:
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    col_nombre, col_limpieza = detectar_columnas(df)
+    if not col_nombre or not col_limpieza:
+        raise ValueError(
+            f"No se detectan columnas válidas en '{nombre_empresa}'. "
+            "Debe haber una columna de nombre/apartamento y otra de limpieza."
+        )
+
+    cliente_id = obtener_o_crear_cliente(nombre_empresa)
+
+    conn.execute("DELETE FROM alojamientos WHERE cliente_id = ?", (cliente_id,))
+
+    insertados = 0
+    for _, fila in df.iterrows():
+        nombre_alojamiento = str(fila[col_nombre]).strip()
+
+        if nombre_alojamiento == "" or pd.isna(fila[col_limpieza]):
+            continue
+
+        valor_limpieza = str(fila[col_limpieza]).replace(",", ".").strip()
+
+        try:
+            limpieza = float(valor_limpieza)
+        except ValueError:
+            continue
+
+        conn.execute("""
+            INSERT INTO alojamientos (cliente_id, nombre, coste_limpieza)
+            VALUES (?, ?, ?)
+        """, (cliente_id, nombre_alojamiento, limpieza))
+
+        insertados += 1
+
+    return insertados
+
+
+def importar_todos_los_archivos_de_carpeta(carpeta: Path):
+    if not carpeta.exists():
+        raise FileNotFoundError(f"No existe la carpeta: {carpeta}")
+
+    archivos = sorted(list(carpeta.glob("*.csv")) + list(carpeta.glob("*.xlsx")))
+    if not archivos:
+        raise FileNotFoundError(f"No hay CSV/XLSX en la carpeta: {carpeta}")
+
+    resultados = []
+    for archivo in archivos:
+        nombre_empresa = archivo.stem.strip()
+        try:
+            df = leer_archivo_path(archivo)
+            insertados = cargar_archivo_en_bd(df, nombre_empresa)
+            resultados.append((archivo.name, nombre_empresa, insertados, None))
+        except Exception as e:
+            resultados.append((archivo.name, nombre_empresa, 0, str(e)))
+
+    return resultados
+
+
 # =========================================================
 # NAV
 # =========================================================
@@ -556,7 +626,7 @@ def render_nav():
     with c1:
         st.markdown('<div class="nav-card-wrap">', unsafe_allow_html=True)
         if st.button(
-            "📁\n\nSubir archivo\n\nCarga y reemplaza\nalojamientos desde CSV o\nExcel",
+            "📁\n\nSubir archivo\n\nCarga manual o\nimportación masiva",
             key="nav1",
             use_container_width=True
         ):
@@ -567,7 +637,7 @@ def render_nav():
     with c2:
         st.markdown('<div class="nav-card-wrap">', unsafe_allow_html=True)
         if st.button(
-            "⚙️\n\nConfiguración\n\nMarkups por canal y\ndescuentos por noches\n",
+            "⚙️\n\nConfiguración\n\nMarkups por canal y\ndescuentos por noches",
             key="nav2",
             use_container_width=True
         ):
@@ -622,78 +692,102 @@ def pin_gate(section_name: str, state_key: str):
 
 
 # =========================================================
-# SECCIÓN: SUBIR ARCHIVO
+# SECCIÓN: SUBIR / IMPORTAR
 # =========================================================
 def section_upload():
     allowed = pin_gate("📁 Subir archivo", "upload_unlocked")
     if not allowed:
         return
 
-    st.subheader("Subida de datos")
-    empresa = st.text_input("Nombre de la empresa", key="upload_empresa")
-    archivo = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"], key="upload_file")
+    tab1, tab2 = st.tabs(["Carga manual", "Importar carpeta datos/"])
 
-    if archivo and empresa:
-        try:
-            df = leer_archivo_datos(archivo)
-            df.columns = df.columns.str.strip().str.lower()
+    with tab1:
+        st.subheader("Carga manual de un archivo")
+        empresa = st.text_input("Nombre de la empresa", key="upload_empresa")
+        archivo = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"], key="upload_file")
 
-            st.write("Columnas detectadas:", list(df.columns))
-            col_nombre, col_limpieza = detectar_columnas(df)
+        if archivo and empresa:
+            try:
+                df = leer_archivo_datos(archivo)
+                df.columns = df.columns.str.strip().str.lower()
 
-            if not col_nombre or not col_limpieza:
-                st.error("❌ No se detectan columnas válidas en el archivo")
-                st.info("Debe haber una columna de nombre/apartamento y otra de limpieza.")
-            else:
-                st.success(f"✅ Columnas detectadas: {col_nombre} / {col_limpieza}")
+                st.write("Columnas detectadas:", list(df.columns))
+                col_nombre, col_limpieza = detectar_columnas(df)
 
-                cliente_id = obtener_o_crear_cliente(empresa)
-                total_actual = contar_alojamientos(cliente_id)
-
-                if total_actual > 0:
-                    st.warning(
-                        f"⚠️ Esta empresa ya tiene {total_actual} alojamientos. "
-                        "Si continúas, se reemplazarán por los del nuevo archivo."
-                    )
+                if not col_nombre or not col_limpieza:
+                    st.error("❌ No se detectan columnas válidas en el archivo")
+                    st.info("Debe haber una columna de nombre/apartamento y otra de limpieza.")
                 else:
-                    st.info("ℹ️ Esta empresa no tiene alojamientos previos.")
+                    st.success(f"✅ Columnas detectadas: {col_nombre} / {col_limpieza}")
 
-                confirmar = st.checkbox(
-                    "Confirmo que quiero reemplazar los datos actuales",
-                    key="upload_confirm"
-                )
+                    cliente_id = obtener_o_crear_cliente(empresa)
+                    total_actual = contar_alojamientos(cliente_id)
 
-                if st.button("Actualizar base de datos", key="upload_update_btn"):
-                    if not confirmar:
-                        st.error("❌ Debes confirmar antes de continuar")
+                    if total_actual > 0:
+                        st.warning(
+                            f"⚠️ Esta empresa ya tiene {total_actual} alojamientos. "
+                            "Si continúas, se reemplazarán por los del nuevo archivo."
+                        )
                     else:
-                        conn.execute("DELETE FROM alojamientos WHERE cliente_id = ?", (cliente_id,))
+                        st.info("ℹ️ Esta empresa no tiene alojamientos previos.")
 
-                        insertados = 0
-                        for _, fila in df.iterrows():
-                            nombre_alojamiento = str(fila[col_nombre]).strip()
+                    confirmar = st.checkbox(
+                        "Confirmo que quiero reemplazar los datos actuales",
+                        key="upload_confirm"
+                    )
 
-                            if nombre_alojamiento == "" or pd.isna(fila[col_limpieza]):
-                                continue
+                    if st.button("Actualizar base de datos", key="upload_update_btn"):
+                        if not confirmar:
+                            st.error("❌ Debes confirmar antes de continuar")
+                        else:
+                            insertados = cargar_archivo_en_bd(df, empresa)
+                            st.success(f"✅ Datos actualizados correctamente. {insertados} alojamientos cargados.")
 
-                            valor_limpieza = str(fila[col_limpieza]).replace(",", ".").strip()
+            except Exception as e:
+                st.error(f"❌ Error al leer el archivo: {e}")
 
-                            try:
-                                limpieza = float(valor_limpieza)
-                            except ValueError:
-                                continue
+    with tab2:
+        st.subheader("Importación masiva desde la carpeta `datos/`")
+        st.write(f"Ruta esperada: `{CARPETA_DATOS}`")
 
-                            conn.execute("""
-                                INSERT INTO alojamientos (cliente_id, nombre, coste_limpieza)
-                                VALUES (?, ?, ?)
-                            """, (cliente_id, nombre_alojamiento, limpieza))
+        if CARPETA_DATOS.exists():
+            archivos = sorted(list(CARPETA_DATOS.glob("*.csv")) + list(CARPETA_DATOS.glob("*.xlsx")))
+            if archivos:
+                st.write("Archivos detectados:")
+                for a in archivos:
+                    st.write(f"- {a.name}")
+            else:
+                st.info("La carpeta existe, pero no contiene CSV/XLSX")
+        else:
+            st.warning("La carpeta `datos/` todavía no existe en el proyecto")
 
-                            insertados += 1
+        confirmar_masivo = st.checkbox(
+            "Confirmo que quiero importar/reemplazar todas las empresas desde `datos/`",
+            key="bulk_confirm"
+        )
 
-                        st.success(f"✅ Datos actualizados correctamente. {insertados} alojamientos cargados.")
+        if st.button("Importar todos los archivos de datos/", key="bulk_import_btn"):
+            if not confirmar_masivo:
+                st.error("❌ Debes confirmar antes de continuar")
+            else:
+                try:
+                    resultados = importar_todos_los_archivos_de_carpeta(CARPETA_DATOS)
 
-        except Exception as e:
-            st.error(f"❌ Error al leer el archivo: {e}")
+                    ok = [r for r in resultados if r[3] is None]
+                    ko = [r for r in resultados if r[3] is not None]
+
+                    if ok:
+                        st.success(f"✅ Importación completada. Archivos correctos: {len(ok)}")
+                        for archivo, empresa, insertados, _ in ok:
+                            st.write(f"✔ {archivo} → {empresa}: {insertados} alojamientos")
+
+                    if ko:
+                        st.error(f"❌ Archivos con error: {len(ko)}")
+                        for archivo, empresa, _, error in ko:
+                            st.write(f"✖ {archivo} → {empresa}: {error}")
+
+                except Exception as e:
+                    st.error(f"❌ Error en la importación masiva: {e}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -911,7 +1005,7 @@ def section_calculeitor():
 
     c1, c2 = st.columns(2)
     with c1:
-        adr_pasado_txt = st.text_input("ADR año pasado (€)", "0", key="calc_adr")
+        adr_pasado_txt = st.text_input("ADR año pasado (€)", "400", key="calc_adr")
         noches_txt = st.text_input("Noches", "2", key="calc_noches")
     with c2:
         incremento_txt = st.text_input("% esperado este año", "0", key="calc_incremento")
