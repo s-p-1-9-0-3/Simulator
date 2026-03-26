@@ -51,9 +51,9 @@
       }
     ]
   },
-  "living_4_malaga": {
-    "nombre": "Living 4 Malaga",
-    "archivo_csv": "living_4_malaga.csv",
+  "living4malaga": {
+    "nombre": "Living4Malaga",
+    "archivo_csv": "living4malaga.csv",
     "markups": {
       "Airbnb": 0.0,
       "Booking": 0.0,
@@ -103,9 +103,9 @@
       }
     ]
   },
-  "living4malaga": {
-    "nombre": "Living4Malaga",
-    "archivo_csv": "living4malaga.csv",
+  "alfaj_a_de_antonio": {
+    "nombre": "Alfajía de Antonio",
+    "archivo_csv": "alfaj_a_de_antonio.csv",
     "markups": {
       "Airbnb": 0.0,
       "Booking": 0.0,
@@ -129,9 +129,9 @@
       }
     ]
   },
-  "inm_laga": {
-    "nombre": "INMálaga",
-    "archivo_csv": "inm_laga.csv",
+  "alfajia": {
+    "nombre": "Alfajia",
+    "archivo_csv": "alfajia.csv",
     "markups": {
       "Airbnb": 0.0,
       "Booking": 0.0,
