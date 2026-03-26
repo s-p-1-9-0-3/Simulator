@@ -102,5 +102,57 @@
         "Descuento (%)": 55
       }
     ]
+  },
+  "living4malaga": {
+    "nombre": "Living4Malaga",
+    "archivo_csv": "living4malaga.csv",
+    "markups": {
+      "Airbnb": 0.0,
+      "Booking": 0.0,
+      "Web": 0.0
+    },
+    "descuentos": [
+      {
+        "Desde": 2,
+        "Hasta": 3,
+        "Descuento (%)": 45
+      },
+      {
+        "Desde": 4,
+        "Hasta": 6,
+        "Descuento (%)": 50
+      },
+      {
+        "Desde": 7,
+        "Hasta": 10,
+        "Descuento (%)": 55
+      }
+    ]
+  },
+  "inm_laga": {
+    "nombre": "INMálaga",
+    "archivo_csv": "inm_laga.csv",
+    "markups": {
+      "Airbnb": 0.0,
+      "Booking": 0.0,
+      "Web": 0.0
+    },
+    "descuentos": [
+      {
+        "Desde": 2,
+        "Hasta": 3,
+        "Descuento (%)": 45
+      },
+      {
+        "Desde": 4,
+        "Hasta": 6,
+        "Descuento (%)": 50
+      },
+      {
+        "Desde": 7,
+        "Hasta": 10,
+        "Descuento (%)": 55
+      }
+    ]
   }
 }

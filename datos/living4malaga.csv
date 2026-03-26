@@ -1,4 +1,4 @@
-nombre,limpieza 
+nombre,coste_limpieza
 Aduana Presidential,140
 Alameda Butterfly,85
 Alameda Colon,160
@@ -12,10 +12,18 @@ Atico Aduana Imperial,400
 Atico Cervantes,60
 Atico Garcia Briz,80
 Atico Marina,70
-Balc髇 de Neri,80
+Balc贸n de Neri,80
 Blue Bay Apartment,65
 Blue Bay Penthouse,65
 Boho Chic Apartment,140
+Calder贸n 2100,80
+Calder贸n 2101,65
+Calder贸n 2200,80
+Calder贸n 2201,65
+Calder贸n 2300,80
+Calder贸n 2301,65
+Calder贸n 2400,80
+Calder贸n 2401,65
 Carcer Apartment,60
 Carreteria 101,60
 Carreteria 102,60
@@ -31,14 +39,6 @@ Carreteria 402,60
 Cathedral Boutique,60
 Central Haven,60
 Chillout Garden Deluxe,100
-Calder髇 2100,80
-Calder髇 2101,65
-Calder髇 2200,80
-Calder髇 2201,65
-Calder髇 2300,80
-Calder髇 2301,65
-Calder髇 2400,80
-Calder髇 2401,65
 City Views Terrace,70
 Echegaray,140
 El Escondite Triplex,90
@@ -61,16 +61,16 @@ Le Coquet Center Apartment,60
 Majestic Granada Street,130
 Malaga Centre Premium,80
 Malaga Serenity,60
-Mariblanca Bajo A,50
-Mariblanca Bajo B,50
-Mariblanca 1A Balc髇 Exterior,50
-Mariblanca 1B Balc髇 Exterior,50
+Mariblanca 1A Balc贸n Exterior,50
+Mariblanca 1B Balc贸n Exterior,50
 Mariblanca 1C Superior,50
 Mariblanca 1D Superior,50
 Mariblanca 2A Balcon Exterior,50
-Mariblanca 2B Balc髇 Exterior,50
+Mariblanca 2B Balc贸n Exterior,50
 Mariblanca 2C Duplex,50
 Mariblanca 2D Duplex,50
+Mariblanca Bajo A,50
+Mariblanca Bajo B,50
 Marin Central View,120
 Marin Sky,60
 Mariscal Centre Apartment,80
@@ -79,15 +79,15 @@ Mi Carmela Beach,80
 Miramar Luxe Beach,120
 Molina Lario,60
 Monte Sancha Deluxe,180
-Muelle Uno 2F apartamento,60
-Muelle Uno 5F apartamento,60
 Muelle Uno 10A estudio,50
 Muelle Uno 2A estudio,50
+Muelle Uno 2F apartamento,60
 Muelle Uno 3A estudio,50
 Muelle Uno 5A estudio,50
+Muelle Uno 5F apartamento,60
+Nereo Apartment,80
 Nereo Studio 1A,60
 Nereo Studio 1B,60
-Nereo Apartment,80
 New Marina Square,60
 New Oasis Supreme,80
 Ocean Glow,120
@@ -96,31 +96,31 @@ Pacific Terrace Apartment,100
 Pedregalejo Loft,70
 Picasso Apartment,120
 Plaza de las Cofradias,80
+Prime Luxe 1B 2 Bedrooms,80
 Prime Luxe 1D Studio,60
 Prime Luxe Balcony 1A,60
 Prime Luxe Balcony 3A,60
-Prime Luxe 1B 2 Bedrooms,80
 Reding 8 Terrace,140
 Rustic Chic,60
+Sea Breeze,120
+Sea at the City Villa,160
 Seafront Duplex,160
-Seaside apartment 3,50
-Seaside apartment 4,50
 Seaside Duplex 1,75
 Seaside Duplex 2 Terrace,75
-Sea at the City Villa,160
-Sea Breeze,120
+Seaside apartment 3,50
+Seaside apartment 4,50
 Shining Beetle,100
 Sky Garden Duplex,140
 Skyline 2,60
 Skyline 3,60
-Skyline Rooftop Jacuzzi,60
 Skyline Jacuzzi,60
+Skyline Rooftop Jacuzzi,60
 Skyline Triplex,90
-Soho Vibes,100
 Soho Centre Experience,110
 Soho Orangerie Deluxe,90
+Soho Vibes,100
 Spring Boutique Apartment,60
-Studio Boh鑝e M醠aga,60
+Studio Boh猫me M谩laga,60
 Stylish Monroy,140
 Suite Flamingo,60
 Suite San Francisco,60
@@ -128,11 +128,11 @@ Sun&Terrace Penthouse,140
 Terraza Andaluza,60
 The Dowtown Apartment,100
 The Eagle Wings,80
-Theatre Square Terrace,160
 The Secret Studio,60
+Theatre Square Terrace,160
 Tower Horizon,60
-Union Central,80
 Uncibay Selvatique Apartment,100
+Union Central,80
 Urban Chic 1,60
 Urban Chic 3A,60
 Urban Chic 3B,100
