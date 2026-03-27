@@ -591,7 +591,7 @@ def bootstrap_config_with_existing_csvs(config: dict) -> dict:
     return config
 
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def cargar_config() -> dict:
     config = load_config_from_disk()
     return bootstrap_config_with_existing_csvs(config)
@@ -599,6 +599,11 @@ def cargar_config() -> dict:
 
 def guardar_config(config: dict):
     save_config_to_disk(config)
+    cargar_config.clear()
+
+
+def invalidar_config():
+    """Llama esto después de cualquier operación que cambie el JSON o los CSVs."""
     cargar_config.clear()
 
 
@@ -673,7 +678,12 @@ def contar_alojamientos(empresa_id: str) -> int:
 
 def obtener_empresas():
     config = cargar_config()
-    empresas = [(empresa_id, data.get("nombre", pretty_name_from_slug(empresa_id))) for empresa_id, data in config.items()]
+    empresas = []
+    for empresa_id, data in config.items():
+        # Solo incluir si tiene CSV con al menos una fila
+        ruta = DATA_DIR / data.get("archivo_csv", f"{empresa_id}.csv")
+        if ruta.exists() and ruta.stat().st_size > 0:
+            empresas.append((empresa_id, data.get("nombre", pretty_name_from_slug(empresa_id))))
     return sorted(empresas, key=lambda x: x[1].lower())
 
 
@@ -1004,50 +1014,107 @@ def section_upload():
         return
 
     st.subheader("Subida de datos")
-    empresa = st.text_input("Nombre de la empresa", key="upload_empresa")
-    archivo = st.file_uploader("Sube tu archivo", type=["csv", "xlsx"], key="upload_file")
 
-    if archivo and empresa:
+    # Selector de empresa existente O nombre nuevo
+    config_actual = cargar_config()
+    empresas_existentes = sorted(
+        [(eid, data.get("nombre", pretty_name_from_slug(eid))) for eid, data in config_actual.items()],
+        key=lambda x: x[1].lower()
+    )
+    nombres_existentes = [nombre for _, nombre in empresas_existentes]
+
+    modo = st.radio(
+        "¿Es una empresa nueva o existente?",
+        ["Empresa existente", "Nueva empresa"],
+        horizontal=True,
+        key="upload_modo"
+    )
+
+    empresa_nombre = None
+    empresa_id_previo = None
+
+    if modo == "Empresa existente":
+        if not nombres_existentes:
+            st.info("No hay empresas registradas todavía. Elige 'Nueva empresa'.")
+        else:
+            sel = st.selectbox("Selecciona empresa", nombres_existentes, key="upload_empresa_sel")
+            empresa_nombre = sel
+            # Recuperar el id real
+            empresa_id_previo = next(eid for eid, nom in empresas_existentes if nom == sel)
+    else:
+        empresa_nombre = st.text_input("Nombre de la nueva empresa", key="upload_empresa_nueva").strip()
+        if empresa_nombre:
+            slug_nuevo = slugify(empresa_nombre)
+            if slug_nuevo in config_actual:
+                st.warning(
+                    f"⚠️ Ya existe una empresa con un nombre similar "
+                    f"({config_actual[slug_nuevo].get('nombre', slug_nuevo)}). "
+                    "Se sobreescribirán sus datos si confirmas."
+                )
+                empresa_id_previo = slug_nuevo
+
+    archivo = st.file_uploader("Sube tu archivo (CSV o Excel)", type=["csv", "xlsx"], key="upload_file")
+
+    if archivo and empresa_nombre:
         try:
             df = leer_archivo_datos(archivo)
-            df.columns = df.columns.str.strip().str.lower()
+            df_limpio = normalizar_df_alojamientos(df)
 
-            st.write("Columnas detectadas:", list(df.columns))
-            col_nombre, col_limpieza = detectar_columnas(df)
+            st.success(f"✅ Archivo válido · {len(df_limpio)} alojamientos detectados")
 
-            if not col_nombre or not col_limpieza:
-                st.error("❌ No se detectan columnas válidas en el archivo")
-                st.info("Debe haber una columna de nombre/apartamento y otra de limpieza.")
-            else:
-                st.success(f"✅ Columnas detectadas: {col_nombre} / {col_limpieza}")
+            with st.expander("Vista previa de los datos", expanded=False):
+                st.dataframe(df_limpio, use_container_width=True, hide_index=True)
 
-                empresa_id = asegurar_empresa(empresa)
-                total_actual = contar_alojamientos(empresa_id)
+            # Calcular empresa_id definitivo
+            empresa_id_final = empresa_id_previo if empresa_id_previo else slugify(empresa_nombre)
+            total_actual = contar_alojamientos(empresa_id_final)
 
-                if total_actual > 0:
-                    st.warning(
-                        f"⚠️ Esta empresa ya tiene {total_actual} alojamientos. "
-                        "Si continúas, se reemplazarán por los del nuevo archivo."
-                    )
-                else:
-                    st.info("ℹ️ Esta empresa no tiene alojamientos previos.")
-
-                confirmar = st.checkbox(
-                    "Confirmo que quiero reemplazar los datos actuales",
-                    key="upload_confirm"
+            if total_actual > 0:
+                st.warning(
+                    f"⚠️ Esta empresa ya tiene **{total_actual} alojamientos**. "
+                    "Al confirmar se reemplazarán por los {len(df_limpio)} del nuevo archivo."
                 )
 
-                if st.button("Actualizar datos", key="upload_update_btn"):
-                    if not confirmar:
-                        st.error("❌ Debes confirmar antes de continuar")
-                    else:
-                        df_limpio = normalizar_df_alojamientos(df)
-                        df_limpio.to_csv(ruta_csv_empresa(empresa_id), index=False, encoding="utf-8")
-                        cargar_config.clear()
-                        st.success(f"✅ Datos actualizados correctamente. {len(df_limpio)} alojamientos cargados.")
+            confirmar = st.checkbox(
+                "Confirmo que quiero guardar / reemplazar los datos",
+                key="upload_confirm"
+            )
 
+            if st.button("Guardar datos", key="upload_update_btn"):
+                if not confirmar:
+                    st.error("❌ Marca la casilla de confirmación antes de continuar")
+                else:
+                    # Crear o actualizar la empresa en config (sin duplicar)
+                    config = cargar_config()
+                    if empresa_id_final not in config:
+                        config[empresa_id_final] = default_empresa_config(
+                            nombre_empresa=empresa_nombre,
+                            archivo_csv=f"{empresa_id_final}.csv",
+                        )
+                    else:
+                        # Actualizar nombre por si ha cambiado ligeramente
+                        config[empresa_id_final]["nombre"] = empresa_nombre
+                        config[empresa_id_final]["archivo_csv"] = f"{empresa_id_final}.csv"
+
+                    guardar_config(config)
+
+                    # Guardar CSV (sobreescribe si ya existe)
+                    ruta_destino = DATA_DIR / f"{empresa_id_final}.csv"
+                    df_limpio.to_csv(ruta_destino, index=False, encoding="utf-8")
+                    invalidar_config()
+
+                    st.success(
+                        f"✅ Datos guardados correctamente. "
+                        f"**{len(df_limpio)} alojamientos** cargados para **{empresa_nombre}**."
+                    )
+
+        except ValueError as e:
+            st.error(f"❌ Problema con el archivo: {e}")
         except Exception as e:
-            st.error(f"❌ Error al leer el archivo: {e}")
+            st.error(f"❌ Error inesperado: {e}")
+
+    elif archivo and not empresa_nombre:
+        st.info("Introduce o selecciona el nombre de la empresa para continuar.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1072,24 +1139,33 @@ def section_config():
 
     markups_actuales = obtener_markups_empresa(empresa_id)
 
+    def fmt_markup(v: float) -> str:
+        if v == 0.0:
+            return "0"
+        s = f"{v:.4f}".rstrip("0").rstrip(".")
+        return s
+
     c1, c2, c3 = st.columns(3)
     with c1:
         markup_airbnb_txt = st.text_input(
             "Markup Airbnb (%)",
-            value=f"{markups_actuales['Airbnb']:.2f}".rstrip("0").rstrip("."),
-            key="cfg_markup_airbnb"
+            value=fmt_markup(markups_actuales["Airbnb"]),
+            key=f"cfg_markup_airbnb_{empresa_id}",
+            placeholder="0"
         )
     with c2:
         markup_booking_txt = st.text_input(
             "Markup Booking (%)",
-            value=f"{markups_actuales['Booking']:.2f}".rstrip("0").rstrip("."),
-            key="cfg_markup_booking"
+            value=fmt_markup(markups_actuales["Booking"]),
+            key=f"cfg_markup_booking_{empresa_id}",
+            placeholder="0"
         )
     with c3:
         markup_web_txt = st.text_input(
             "Markup Web (%)",
-            value=f"{markups_actuales['Web']:.2f}".rstrip("0").rstrip("."),
-            key="cfg_markup_web"
+            value=fmt_markup(markups_actuales["Web"]),
+            key=f"cfg_markup_web_{empresa_id}",
+            placeholder="0"
         )
 
     st.write("### 📊 Descuentos por rango de noches")
