@@ -536,11 +536,7 @@ def default_empresa_config(nombre_empresa: str, archivo_csv: str) -> dict:
             "Booking": 0.0,
             "Web": 0.0,
         },
-        "descuentos": [
-            {"Desde": 2, "Hasta": 3, "Descuento (%)": 45},
-            {"Desde": 4, "Hasta": 6, "Descuento (%)": 50},
-            {"Desde": 7, "Hasta": 10, "Descuento (%)": 55},
-        ],
+        "descuentos": [],
     }
 
 
@@ -717,11 +713,7 @@ def obtener_descuentos_empresa(empresa_id: str) -> pd.DataFrame:
     if descuentos:
         return pd.DataFrame(descuentos)
 
-    return pd.DataFrame({
-        "Desde": [2, 4, 7],
-        "Hasta": [3, 6, 10],
-        "Descuento (%)": [45, 50, 55]
-    })
+    return pd.DataFrame({"Desde": [], "Hasta": [], "Descuento (%)": []})
 
 
 def guardar_descuentos_empresa(empresa_id: str, df_descuentos: pd.DataFrame):
