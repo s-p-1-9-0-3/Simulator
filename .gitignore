@@ -1,9 +1,30 @@
+# Entorno virtual
 .venv/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Base de datos (versión antigua, ya no se usa)
 *.db
 *.db-shm
 *.db-wal
+
+# Streamlit secrets
 .streamlit/secrets.toml
-datos/
+
+# Datos y config (se gestionan desde la app, no van al repo)
+datos/*.csv
+datos/*.xlsx
 config/empresas_config.json
+
+# Resultados locales
+resultados/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/settings.json
